@@ -104,11 +104,41 @@ static struct rte_eth_conf port_conf = {
 
 struct rte_mempool * l2fwd_pktmbuf_pool = NULL;
 
+static uint64_t pkt_counter = 0;
+
 /* Per-port statistics struct */
 struct l2fwd_port_statistics {
 	uint64_t tx;
 	uint64_t rx;
-	uint64_t dropped; 
+	uint64_t dropped;
+	uint64_t tx_bytes;
+        uint64_t rx_bytes;
+        uint64_t tx_error;
+        uint64_t rx_error;
+        uint64_t tx_burst;
+        uint64_t rx_burst;
+        uint64_t rx_nombuf;
+        uint64_t pkt_p_s_tx;
+        uint64_t pkt_p_s_rx;
+        uint16_t ether_type;
+        uint16_t vlan_tag;
+        uint16_t vlan_id;
+        uint16_t vlan_priority;
+        struct rte_ether_addr d_addr;
+        struct rte_ether_addr s_addr;
+        uint32_t pkt_length;
+        uint16_t data_len;
+        char ip_protocol[6];
+        unsigned char ip_s_addr[4];
+        unsigned char ip_d_addr[4];
+        uint64_t jitter_ns;
+        double latency_us;
+        uint64_t timestamp;
+        uint64_t timestamp_error;
+        uint64_t elapsed_tx_time;
+        uint64_t elapsed_rx_time;
+        uint64_t timestamp_s;
+        uint64_t timestamp_us;
 } __rte_cache_aligned;
 struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 
@@ -120,6 +150,24 @@ static uint64_t timer_period = 10; /* default period is 10 seconds */
 /*Destination mac address*/
 static uint8_t dst_mac_addr[6] = {0x00,0x00,0x00,0x00,0x00,0x00};
 
+static void hex_dumps(struct rte_mbuf *m, unsigned portid)
+{
+        unsigned char *p = rte_pktmbuf_mtod(m, unsigned char *);
+        unsigned i, j;
+
+        j = 0;
+	printf("\n");
+        for (i = 0; i < m->pkt_len; i++) {
+                if ( j == 15) {
+                        printf("\n");
+                        j = 0;
+                }
+                printf("%02x ", ((*p) & 0xffff));
+                p++;
+                j++;
+        }
+        printf("\n\n");
+}
 
 static void
 extract_l2packet(struct rte_mbuf *m, int rx_batch_idx, int rx_batch_ttl)
@@ -200,8 +248,105 @@ static long diff_us(struct timespec t1, struct timespec t2)
 
 /* Print out statistics on packets dropped */
 
+static void print_stats(void)
+{
+        uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
+        unsigned portid;
+
+        total_packets_dropped = 0;
+        total_packets_tx = 0;
+        total_packets_rx = 0;
+
+        const char clr[] = { 27, '[', '2', 'J', '\0' };
+        const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
+
+                /* Clear screen and move to top left */
+        printf("%s%s", clr, topLeft);
+        printf("\nElapsed time Tx/Rx: %" PRIu64 "/%" PRIu64 " seconds",
+                port_statistics[portid].elapsed_tx_time, port_statistics[portid].elapsed_rx_time);
+
+        printf("\nPort statistics ====================================");
+
+        for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
+                /* skip disabled ports */
+                if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
+                        continue;
+
+                printf("\nStatistics for port %u ------------------------------", portid);
+                printf("\nMAC Address: %02X:%02X:%02X:%02X:%02X:%02X",
+                        l2fwd_ports_eth_addr[portid].addr_bytes[0],
+                        l2fwd_ports_eth_addr[portid].addr_bytes[1],
+                        l2fwd_ports_eth_addr[portid].addr_bytes[2],
+                        l2fwd_ports_eth_addr[portid].addr_bytes[3],
+                        l2fwd_ports_eth_addr[portid].addr_bytes[4],
+                        l2fwd_ports_eth_addr[portid].addr_bytes[5]);
+                printf("\nPackets Tx/Rx:       %18"PRIu64"/%"PRIu64,
+                        port_statistics[portid].tx, port_statistics[portid].rx);
+                printf("\nPackets dropped:     %18"PRIu64,
+                        port_statistics[portid].dropped);
+                printf("\nPackets Tx/Rx burst: %18"PRIu64"/%"PRIu64,
+                        port_statistics[portid].tx_burst, port_statistics[portid].rx_burst);
+                printf("\nPkts Bytes Tx/Rx:    %18"PRIu64"/%"PRIu64,
+                        port_statistics[portid].tx_bytes, port_statistics[portid].rx_bytes);
+                printf("\nPkts error Tx/Rx:    %18"PRIu64"/%"PRIu64,
+                        port_statistics[portid].tx_error, port_statistics[portid].rx_error);
+                printf("\nrx_nombuf:           %18"PRIu64, port_statistics[portid].rx_nombuf);
+                printf("\nPkts/s Tx/Rx:        %18"PRIu64 "/%"PRIu64, port_statistics[portid].pkt_p_s_tx, port_statistics[portid].pkt_p_s_rx);
+                printf("\nSrc MAC Address: %02X:%02X:%02X:%02X:%02X:%02X",
+                        port_statistics[portid].s_addr.addr_bytes[0],
+                        port_statistics[portid].s_addr.addr_bytes[1],
+                        port_statistics[portid].s_addr.addr_bytes[2],
+                        port_statistics[portid].s_addr.addr_bytes[3],
+			port_statistics[portid].s_addr.addr_bytes[4],
+                        port_statistics[portid].s_addr.addr_bytes[5]);
+                printf("\nDst MAC Address: %02X:%02X:%02X:%02X:%02X:%02X",
+                        port_statistics[portid].d_addr.addr_bytes[0],
+                        port_statistics[portid].d_addr.addr_bytes[1],
+                        port_statistics[portid].d_addr.addr_bytes[2],
+                        port_statistics[portid].d_addr.addr_bytes[3],
+                        port_statistics[portid].d_addr.addr_bytes[4],
+                        port_statistics[portid].d_addr.addr_bytes[5]);
+                printf("\nEther Type:          %18"PRIx16, port_statistics[portid].ether_type);
+                printf("\nVLAN ID:             %18"PRIu16, port_statistics[portid].vlan_id);
+                printf("\nVLAN Priority:       %18"PRIu16, port_statistics[portid].vlan_priority);
+                printf("\nPacket Lenght:       %18"PRIu32, port_statistics[portid].pkt_length);
+                printf("\nData Length:         %18"PRIu16, port_statistics[portid].data_len);
+                printf("\nIP Protocol:         %18s", port_statistics[portid].ip_protocol);
+                printf("\nSrc IP Address: %d.%d.%d.%d",
+                        port_statistics[portid].ip_s_addr[0],
+                        port_statistics[portid].ip_s_addr[1],
+                        port_statistics[portid].ip_s_addr[2],
+                        port_statistics[portid].ip_s_addr[3]);
+                printf("\nDst IP Address: %d.%d.%d.%d",
+                        port_statistics[portid].ip_d_addr[0],
+                        port_statistics[portid].ip_d_addr[1],
+                        port_statistics[portid].ip_d_addr[2],
+                        port_statistics[portid].ip_d_addr[3]);
+                printf("\nSW Jitter (ns)       %18"PRIu64, port_statistics[portid].jitter_ns);
+                printf("\nSW Latency (ms):     %18.4f", port_statistics[portid].latency_us);
+                printf("\nSW timestamp (s):    %18"PRIu64, port_statistics[portid].timestamp_s);
+                printf("\nSW timestamp (us):   %18"PRIu64, port_statistics[portid].timestamp_us);
+                printf("\ntotal timestamp (us):%18"PRIu64, port_statistics[portid].timestamp);
+                printf("\nTimestamp error:     %18"PRIu64, port_statistics[portid].timestamp_error);
+
+                total_packets_dropped += port_statistics[portid].dropped;
+                total_packets_tx += port_statistics[portid].tx;
+                total_packets_rx += port_statistics[portid].rx;
+        }
+        printf("\nAggregate statistics ==============================="
+                   "\nTotal packets sent:      %14"PRIu64
+                   "\nTotal packets received:  %14"PRIu64
+                   "\nTotal packets dropped:   %14"PRIu64,
+                   total_packets_tx,
+                   total_packets_rx,
+                   total_packets_dropped);
+        printf("\n====================================================\n");
+
+        fflush(stdout);
+}
+
 static void
-print_stats(void)
+print_stats1(void)
 {
         struct rte_eth_stats eth_stats;
         unsigned int i;
@@ -323,6 +468,15 @@ static uint64_t get_time_nanosec(clockid_t clkid)
 	return now.tv_sec * NSEC_PER_SEC + now.tv_nsec;
 }
 
+typedef uint64_t tsc_t;
+static inline tsc_t *tsc_field(struct rte_mbuf *mbuf, int tsc_dynfield_offset)
+{
+        struct rte_ether_hdr *eth_hdr;
+        eth_hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+        void *p = (struct rte_mbuf *)(eth_hdr);
+        return RTE_MBUF_DYNFIELD(p, tsc_dynfield_offset, tsc_t *);
+}
+
 static int  construct_packet(struct rte_mbuf *pkt[], const int pkt_size)
 {
 #define TIME_STAMP_MSG_SIZE 36  
@@ -351,19 +505,27 @@ static int  construct_packet(struct rte_mbuf *pkt[], const int pkt_size)
 
         
 
-        uint64_t tx_tsp  = get_time_nanosec(CLOCK_REALTIME); 
+        /*
+	uint64_t tx_tsp  = get_time_nanosec(CLOCK_REALTIME);
         printf("\nclock_gettime %"PRIu64, tx_tsp);
         char b_tstamp[TIME_STAMP_MSG_SIZE]; 
         int i_tmp  = sprintf(b_tstamp,"%"PRIu64,tx_tsp);
+	*/
 
+	uint64_t tx_tsp = 0;
+	int tsc_dynfield_offset;
+	unsigned portid = 0;
 
 
         //original code 
 	struct Message obj;
-        memcpy(obj.data, b_tstamp,TIME_STAMP_MSG_SIZE);
+        //memcpy(obj.data, b_tstamp,TIME_STAMP_MSG_SIZE);
+	//memcpy(obj.data, b_tstamp, sizeof(b_tstamp));
 
 	struct Message *msg;
-	struct rte_ether_addr s_addr = {{0x14,0x02,0xEC,0x89,0x8D,0x24}};
+	//struct rte_ether_addr s_addr = {{0x14,0x02,0xEC,0x89,0x8D,0x24}};
+	struct rte_ether_addr s_addr;
+	rte_eth_macaddr_get(portid, &s_addr);
 	struct rte_ether_addr d_addr = {{dst_mac_addr[0],dst_mac_addr[1],dst_mac_addr[2],dst_mac_addr[3],dst_mac_addr[4],dst_mac_addr[5]}};
  
 	uint16_t ether_type = 0x0800;//0x0a00;
@@ -374,19 +536,43 @@ static int  construct_packet(struct rte_mbuf *pkt[], const int pkt_size)
         struct rte_mbuf *m;
 	int i;
 	for(i=0;i<BURST_SIZE;i++) {
+		tx_tsp  = get_time_nanosec(CLOCK_REALTIME);
+
 		pkt[i] = rte_pktmbuf_alloc(l2fwd_pktmbuf_pool);
 		eth_hdr = rte_pktmbuf_mtod(pkt[i],struct rte_ether_hdr*);
 		eth_hdr->d_addr = d_addr;
 		eth_hdr->s_addr = s_addr;
 		eth_hdr->ether_type = ether_type;
+
+		// put tx timestamps after pkt counter (8 bytes)
+                tsc_dynfield_offset = sizeof(struct rte_ether_hdr);
+                *tsc_field(pkt[i], tsc_dynfield_offset) = tx_tsp;
+
+		// put counter after timestamp (8 bytes)
+		pkt_counter += 1;
+		tsc_dynfield_offset = sizeof(struct rte_ether_hdr) + sizeof(tx_tsp);
+		*tsc_field(pkt[i], tsc_dynfield_offset) = pkt_counter;
+
+		/*
 		msg = (struct Message*) (rte_pktmbuf_mtod(pkt[i],char*) + sizeof(struct rte_ether_hdr));
 		*msg = obj;
 		int pkt_size = sizeof(struct Message) + sizeof(struct rte_ether_hdr);
+		*/
+
+		int pkt_size = 64;
 		pkt[i]->data_len = pkt_size;
 		pkt[i]->pkt_len = pkt_size;
+
+		//printf("pkt ID = %"PRIu64 "\n", pkt_counter);
+		//printf("tx_tsp = %"PRIu64 "\n", tx_tsp);
+		//hex_dumps(pkt[i], 0);
+
+		port_statistics[portid].timestamp_us = tx_tsp;
+		port_statistics[portid].pkt_length = pkt_size;
 	}
 
-       printf("\nTest: Sending Packet (Timestamp:%s) To DESTINATION MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n",
+	/*
+	printf("\nTest: Sending Packet (Timestamp:%s) To DESTINATION MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n",
                                 msg->data, 
                                 eth_hdr->d_addr.addr_bytes[0],
                                 eth_hdr->d_addr.addr_bytes[1],
@@ -394,6 +580,7 @@ static int  construct_packet(struct rte_mbuf *pkt[], const int pkt_size)
                                 eth_hdr->d_addr.addr_bytes[3],
                                 eth_hdr->d_addr.addr_bytes[4],
                                 eth_hdr->d_addr.addr_bytes[5]);
+	*/
 
 
         return 0;
@@ -444,10 +631,12 @@ talker_main_loop(void)
 	while (!force_quit) {
                 //force_quit = true;//for debug purpose cause only one packet send
                 cur_tsc = rte_rdtsc();
-                if (icounter > 100){
+		/*
+		if (icounter > 100){
                     force_quit = true;  
-                }  
-                icounter++;  
+                }
+                icounter++;
+		*/
 
 		/*
 		 * TX burst queue drain
@@ -496,10 +685,11 @@ talker_main_loop(void)
         //printf ("\ntime:%s",t_stamp);
 
         int BURST_SIZE = 1;
-  
+
         struct rte_mbuf *pkt[BURST_SIZE];
         int ret01 = construct_packet(pkt, BURST_SIZE);
         uint16_t nb_tx = rte_eth_tx_burst(0,0,pkt,BURST_SIZE);
+	port_statistics[portid].tx += nb_tx;
 
 
 /*        printf("\nSending Packet (Timestamp:%s) To DESTINATION MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n",
